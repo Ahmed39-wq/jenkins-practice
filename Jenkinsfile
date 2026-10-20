@@ -3,7 +3,7 @@ pipeline {
     stages {
         stage('Hello') {
             steps {
-                echo 'Hell, Version 2'
+                echo 'Hello from a Jenkinsfile in git'
             }
         }
         stage('Check') {
