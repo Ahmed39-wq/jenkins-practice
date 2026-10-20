@@ -3,7 +3,7 @@ pipeline {
     stages {
         stage('Hello') {
             steps {
-                echo 'Hello from a Jenkinsfile in git'
+                echo 'Hello from a Jenkinsfile in git. Reverting previous changes'
             }
         }
         stage('Check') {
