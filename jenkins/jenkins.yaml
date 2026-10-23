@@ -28,4 +28,7 @@ jobs:
             scriptPath('Jenkinsfile')
           }
         }
+        triggers {
+          scm('* * * * *')
+        }
       }
