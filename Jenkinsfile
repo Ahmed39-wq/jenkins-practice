@@ -1,14 +1,14 @@
 pipeline {
     agent any
     stages {
-        stage('Hello') {
+        stage('Install') {
             steps {
-                echo 'Hello from a Jenkinsfile in git. Added triggers to Jenkins'
+                sh 'npm install'
             }
         }
-        stage('Check') {
+        stage('Test') {
             steps {
-                sh 'echo Running on: $(hostname)'
+                sh 'npm test'
             }
         }
     }
