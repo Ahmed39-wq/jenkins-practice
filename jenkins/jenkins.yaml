@@ -14,6 +14,14 @@ unclassified:
   location:
     url: "http://localhost:8080/"
 
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - string:
+              scope: GLOBAL
+              id: "demo-api-key"
+              secret: "${DEMO_API_KEY}"
 jobs:
   - script: |
       pipelineJob('hello-pipeline') {
