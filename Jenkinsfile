@@ -13,5 +13,12 @@ pipeline {
                 sh 'npm test'
             }
         }
+        stage('Secret demo') {
+            steps {
+                withCredentials([string(credentialsId: 'demo-api-key', variable: 'API_KEY')]) {
+                    sh 'echo "The key is $API_KEY"'
+                }
+            }
+        }
     }
 }
