@@ -2,21 +2,27 @@ pipeline {
     agent {
         docker { image 'node:18' }
     }
+    environment {
+        npm_config_cache = '/tmp/.npm'
+    }
     stages {
-        stage('Install') {
-            steps {
-                sh 'npm install'
-            }
-        }
         stage('Test') {
             steps {
                 sh 'npm test'
             }
         }
-        stage('Secret demo') {
+        stage('Build') {
             steps {
-                withCredentials([string(credentialsId: 'demo-api-key', variable: 'API_KEY')]) {
-                    sh 'echo "The key is $API_KEY"'
+                dir('site') {
+                    sh 'npm ci'
+                    sh 'npm run build'
+                }
+            }
+        }
+        stage('Deploy') {
+            steps {
+                withCredentials([string(credentialsId: 'render-deploy-hook', variable: 'HOOK')]) {
+                    sh 'curl -fsS "$HOOK"'
                 }
             }
         }
