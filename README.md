@@ -1,12 +1,13 @@
 # Jenkins practice: a server and pipeline defined as code
 
-A practice project that builds a complete CI/CD:
+A practice project that builds a complete CI/CD loop on a Windows laptop:
 
-- **Jenkins** runs in a Docker container, and the whole server (plugins, settings, login, job, trigger) is defined by files in this repo.
+- **Jenkins** runs in a Docker container, and the whole server (plugins, settings, login, job, trigger, credentials) is defined by files in this repo.
 - **A pipeline** (the `Jenkinsfile`) tests the project, builds a React site, and deploys it.
 - **Render** hosts the site. It only publishes when Jenkins calls its deploy hook, which only happens after the tests and build pass.
+- **Secrets** (admin password, deploy hook URL) live in a local `.env` file that is never committed.
 
-If the server is destroyed, it can be rebuilt from this repo alone.
+If the server is destroyed, it can be rebuilt from this repo plus the `.env` file.
 
 ---
 
@@ -40,8 +41,9 @@ Think of Jenkins as the oven and the Jenkinsfile as the recipe.
 
 | Location | Holds | After deleting the container and volume |
 |---|---|---|
-| **Repo (git)** | Jenkinsfile, `jenkins/` folder, Node tests, the React app | Still there |
-| **Image (`my-jenkins`)** | Jenkins, plugins, settings, admin login, job, trigger, Docker CLI | Still there. Comes back on every new container |
+| **Repo (git)** | Jenkinsfile, `jenkins/` folder, Node tests, the React app, `.gitignore` | Still there |
+| **Image (`my-jenkins`)** | Jenkins, plugins, settings, admin login, credential definitions, job, trigger, Docker CLI | Still there. Comes back on every new container |
+| **`.env` file (your machine only)** | The secret values: admin password, demo key, Render hook URL | Still there, but it is not in the repo. It is lost if the laptop is lost |
 | **Volume (`jenkins_casc_home`)** | Build history, jobs and credentials created by clicking | Gone |
 
 An image is a **snapshot**. Editing a file does nothing to a running Jenkins until you rebuild the image and start a new container.
@@ -52,6 +54,8 @@ An image is a **snapshot**. Editing a file does nothing to a running Jenkins unt
 
 ```
 .
+├── .gitignore               contains one line: .env
+├── .env                     secrets, local only, NEVER committed
 ├── Jenkinsfile              the pipeline
 ├── package.json             Node project (tests)
 ├── math.js                  code under test (placeholder)
@@ -110,9 +114,29 @@ pipeline {
 - `agent { docker { image 'node:18' } }` runs every step in a fresh `node:18` container, which is thrown away afterwards. Node comes from the image, not from the machine.
 - `npm_config_cache` gives npm a writable cache folder inside the container.
 - `dir('site')` runs the commands inside the `site` folder.
-- The credential **ID** (`render-deploy-hook`) is only a label and is safe in git. The **secret** (the hook URL) lives in Jenkins's credentials store.
+- The credential **ID** (`render-deploy-hook`) is only a label and is safe in git. The **secret** (the hook URL) comes from the credentials store.
 - Single quotes around the `sh` command stop Groovy from pasting the secret into the command text, so Jenkins can mask it in the log.
 - Jenkins runs a Checkout step automatically before the first stage.
+
+### `.gitignore`
+
+```
+.env
+```
+
+A pattern without a slash matches `.env` in any folder. Commit this file **before** creating `.env`.
+
+### `.env`
+
+```
+ADMIN_PASSWORD=choose-a-password
+DEMO_API_KEY=my-fake-api-key
+RENDER_DEPLOY_HOOK=paste-your-hook-url-here
+```
+
+- One variable per line, no spaces around `=`, no quotes (Docker treats quotes as part of the value).
+- Create it in an editor, not by typing it in the terminal, so the secrets don't end up in shell history.
+- **Save the file.** An unsaved editor tab leaves an empty file on disk, and Docker accepts an empty env file without any error.
 
 ### `jenkins/plugins.txt`
 
@@ -141,10 +165,9 @@ COPY jenkins.yaml /casc_configs/jenkins.yaml
 
 - `runSetupWizard=false` turns off the "Unlock Jenkins" and plugin screens. `plugins.txt` and `jenkins.yaml` supply what the wizard would have asked for.
 - `docker.io` installs only the Docker **command-line tool**. There is no daemon in the container (see section 5).
+- Only `plugins.txt` and `jenkins.yaml` are copied in. The `.env` file is never baked into the image.
 
 ### `jenkins/jenkins.yaml`
-
-Replace `YOUR-USERNAME` with your GitHub username.
 
 ```yaml
 jenkins:
@@ -171,6 +194,10 @@ credentials:
               scope: GLOBAL
               id: "demo-api-key"
               secret: "${DEMO_API_KEY}"
+          - string:
+              scope: GLOBAL
+              id: "render-deploy-hook"
+              secret: "${RENDER_DEPLOY_HOOK}"
 
 jobs:
   - script: |
@@ -179,7 +206,7 @@ jobs:
           cpsScm {
             scm {
               git {
-                remote { url('https://github.com/YOUR-USERNAME/jenkins-practice.git') }
+                remote { url('https://github.com/Ahmed39-wq/jenkins-practice.git') }
                 branch('*/main')
               }
             }
@@ -192,10 +219,12 @@ jobs:
       }
 ```
 
-- `${ADMIN_PASSWORD}` and `${DEMO_API_KEY}` are read from environment variables at startup (`-e` on `docker run`), so no secret is written in git.
+- `${ADMIN_PASSWORD}`, `${DEMO_API_KEY}` and `${RENDER_DEPLOY_HOOK}` are read from environment variables at startup, which `--env-file` fills from `.env`. No secret is written in git.
+- The yaml records that a credential exists and what its ID is. The value comes from the environment.
 - `scm('* * * * *')` makes Jenkins poll the repo every minute. A real server would poll less often (for example `H/5 * * * *`).
 - YAML is indentation-sensitive. Keep the spacing exactly.
 - Config as Code creates configured jobs near the end of startup. If the job is missing right after a restart, wait and refresh before changing anything.
+- The usernames you type on Jenkins's setup screens are not used here. The only user is `admin`, defined in this file.
 
 ### Node tests
 
@@ -242,28 +271,20 @@ A Vite + React single-page site (`react`, `react-dom`, `vite`, `@vitejs/plugin-r
 
 ---
 
-## 4. Setting it up from scratch (Windows)
+## 4. Setting it up (Windows)
 
-### Build and run Jenkins
+Commands below assume `MSYS_NO_PATHCONV=1` is exported in your Git Bash window (section 8).
 
-From the `jenkins/` folder (the `.` at the end of `docker build` is required):
+### 4.1 Prerequisites (once per machine)
 
-```bash
-docker build -t my-jenkins .
+1. **Enable virtualization** in BIOS/UEFI (Task Manager > Performance > CPU shows "Virtualization: Enabled").
+2. **Install WSL 2.** In an administrator PowerShell run `wsl --install`, then restart.
+3. **Install and start Docker Desktop.** Wait until it says Docker is running. `docker ps` should print an empty table.
+4. **Clone the repo.**
 
-docker run -d --name jenkins-casc -p 8080:8080 -u root \
-  -e ADMIN_PASSWORD=choose-a-password \
-  -e DEMO_API_KEY=my-fake-api-key \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v jenkins_casc_home:/var/jenkins_home \
-  my-jenkins
-```
+### 4.2 Render site
 
-Wait a minute, then open <http://localhost:8080> and log in as `admin`. The `hello-pipeline` job should already be there.
-
-If an older practice container is still holding port 8080, stop it first (`docker stop jenkins`).
-
-### Render
+First time only. On a new machine the site already exists, so just copy its Deploy Hook URL again from **Settings**.
 
 1. **New > Static Site.** Choose **Git Provider > GitHub**, authorize Render for only this repo, and pick it. Public Git Repository is not used here: per Render's community posts, auto-deploy only works with Git Provider, and Git Provider is the path whose settings this guide matches.
 2. Settings:
@@ -276,14 +297,43 @@ If an older practice container is still holding port 8080, stop it first (`docke
    - *After CI checks pass* waits for GitHub checks, and Jenkins reports none here, so it would likely never deploy.
 4. Copy the **Deploy Hook** URL from the same Settings page. Treat it like a password.
 
-### Store the hook in Jenkins
+### 4.3 Secrets: `.gitignore` and `.env`
 
-**Manage Jenkins > Credentials > System > Global credentials > Add Credentials**
+1. Make sure the repo has a `.gitignore` containing `.env`, and that it is committed and pulled.
+2. In an editor, create `.env` in the **repo root** with the three variables (section 3) and **save it**.
 
-- Kind: **Secret text**
-- Secret: the deploy hook URL
-- ID: `render-deploy-hook` (must match the Jenkinsfile exactly)
+(The paths above are for running from the `jenkins/` folder. From the repo root use `.env`.)
 
+### 4.4 Build and run Jenkins
+
+From the `jenkins/` folder (the `.` at the end of `docker build` is required):
+
+```bash
+docker build -t my-jenkins .
+
+docker run -d --name jenkins-casc -p 8080:8080 -u root \
+  --env-file ../.env \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v jenkins_casc_home:/var/jenkins_home \
+  my-jenkins
+```
+
+`--env-file` is a path relative to the folder you run the command in. From `jenkins/` the root file is `../.env`. From the repo root it is `.env`.
+
+If an older practice container is still holding port 8080, stop it first (`docker stop jenkins`).
+
+### 4.5 Verify
+
+1. **The variables arrived.** This prints a count, never the values. It must print `3`:
+
+```bash
+docker exec jenkins-casc env | grep -c -E "^(ADMIN_PASSWORD|DEMO_API_KEY|RENDER_DEPLOY_HOOK)="
+```
+
+2. Wait a minute, open <http://localhost:8080>, and sign in as `admin` with the password from `.env`. If a **Create First Admin User** page appears instead, do not fill it in: the variables didn't reach the container (section 9).
+3. The `hello-pipeline` job is on the dashboard.
+4. **Manage Jenkins > Credentials** lists `demo-api-key` and `render-deploy-hook`, even though nobody created them by hand.
+5. The first build starts on its own. Render's **Deploys** page shows a deploy triggered by a deploy hook.
 ---
 
 ## 5. How it all fits together
@@ -298,6 +348,10 @@ Every push to `main`:
 6. Render pulls the commit, runs its own build, and publishes `dist`.
 
 Why build in Jenkins when Render builds again? Without it, a compile error would still give a **green Jenkins build** (the hook call only proves Render accepted the request) and fail later on Render, where nobody is watching. With it, the failure turns Jenkins red and the hook is never called. The published result is the same; the difference is where and when you find out.
+
+### The path a secret takes
+
+`.env` (your machine) > `--env-file` > the container's environment > `${RENDER_DEPLOY_HOOK}` in `jenkins.yaml` > Jenkins's credentials store > `withCredentials` in the Jenkinsfile > `curl` (masked in the log).
 
 ### Jenkins runs inside Docker, builds run in other containers
 
@@ -322,14 +376,15 @@ git pull
 docker build -t my-jenkins .
 docker rm -f jenkins-casc
 docker run -d --name jenkins-casc -p 8080:8080 -u root \
-  -e ADMIN_PASSWORD=choose-a-password \
-  -e DEMO_API_KEY=my-fake-api-key \
+  --env-file ../.env \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v jenkins_casc_home:/var/jenkins_home \
   my-jenkins
 ```
 
-Keeping the same `-v jenkins_casc_home:...` keeps build history and clicked-in credentials.
+Keeping the same `-v jenkins_casc_home:...` keeps build history and clicked-in jobs and credentials.
+
+Changing only `.env` doesn't need a rebuild, but the container must be recreated (remove and run) to pick up the new values.
 
 ### The "crashed server" test
 
@@ -340,7 +395,7 @@ docker rm -f jenkins-casc
 docker volume rm jenkins_casc_home
 ```
 
-Expected result: login, plugins, job, trigger, and `demo-api-key` come back. Build history, clicked-in jobs, and clicked-in credentials (including `render-deploy-hook`) do not.
+Expected result: login, plugins, job, trigger, `demo-api-key`, and `render-deploy-hook` all come back. Build history and anything clicked into Jenkins do not.
 
 ### Is the running container stale?
 
@@ -352,6 +407,14 @@ grep -c "something" jenkins.yaml
 docker exec jenkins-casc grep -c "something" /casc_configs/jenkins.yaml
 ```
 
+- Check the variables arrived (must print `3`):
+
+```bash
+docker exec jenkins-casc env | grep -c -E "^(ADMIN_PASSWORD|DEMO_API_KEY|RENDER_DEPLOY_HOOK)="
+```
+
+A missing variable gives no error. The server just starts and behaves wrongly, so run this check whenever something about login or credentials looks off.
+
 ### Housekeeping
 
 - `docker images -a` lists all images. Untagged ones are old builds or intermediate layers.
@@ -359,58 +422,15 @@ docker exec jenkins-casc grep -c "something" /casc_configs/jenkins.yaml
 
 ---
 
-## 7. Flag reference
-
-**`docker run`**
-
-| Flag | Meaning |
-|---|---|
-| `-d` | Detached: run in the background |
-| `--name` | Name the container |
-| `-p host:container` | Publish a port (`8080:8080` makes `localhost:8080` reach Jenkins) |
-| `-v source:path` | Mount a volume or file at `path` inside the container |
-| `-e NAME=value` | Set an environment variable |
-| `-u root` | Run as the root user (lets Jenkins use the Docker socket) |
-| `-t` | Give the container a pseudo-terminal (Jenkins uses `-t -d` for build containers) |
-
-**Other Docker commands**
-
-| Command | Meaning |
-|---|---|
-| `docker build -t name .` | `-t` tags the image. `.` is the build context (folder with the Dockerfile and the files it copies) |
-| `docker rm -f` | Force-remove, even if running. Removes the container only, never a named volume |
-| `docker ps -a` | Include stopped containers |
-| `docker stop --time=1` | Wait 1 second, then force stop |
-| `docker rm --volumes` | Also remove the container's anonymous volumes (Jenkins uses this to clean up build containers) |
-
-**Other tools**
-
-- `grep`: `-n` line numbers, `-i` ignore case, `-E` patterns like `a|b`, `-c` count only, `-A8` 8 lines after a match.
-- `ls -ln`: detailed list with numeric owner IDs.
-- `rm -rf`: recursive and forced. Check the path first.
-- `apt-get install -y`: answer yes to prompts.
-
----
-
-## 8. Git Bash on Windows
-
-Git Bash rewrites any argument that **starts with `/`** into a Windows path (`/var/run/docker.sock` becomes `C:\Program Files\Git\var\run\docker.sock`). Docker never sees the original, which causes errors like `mkdir C:\Program Files\Git\var: Access is denied`.
-
-Fixes, any one of them:
-
-- Prefix the command: `MSYS_NO_PATHCONV=1 docker ...`
-- Double the leading slash: `//var/run/docker.sock`
-- Run `export MSYS_NO_PATHCONV=1` once per Git Bash window
-- Use PowerShell instead
-
-Only arguments that start with `/` and refer to something inside a container are affected. `docker ps`, `docker build -t my-jenkins .`, and `docker rm -f jenkins-casc` don't need it.
 
 
-## 10. Lessons worth remembering
+## 7. Lessons worth remembering
 
 - **An image is a snapshot.** Editing a file changes nothing until you rebuild the image and start a new container.
 - **Written-down config comes back; runtime data doesn't.** Anything in git or the image survives a rebuild. Anything clicked into Jenkins lives only in the volume.
-- **Keep secrets out of git, even in private repos.** Git history keeps them. Pass them in with `-e` and reference them from `jenkins.yaml` as `${VAR}`.
+- **Keep secrets out of git, even in private repos.** Git history keeps them. Put them in `.env`, list `.env` in `.gitignore` before creating it, and confirm with `git status`.
+- **A missing or empty secret gives no error.** Docker accepts an empty env file, and Jenkins just starts without the user or credential. Verify with the variable count.
+- **Save your files.** An unsaved editor tab is an empty file to Docker.
 - **The credential ID is a label; the secret is the value.** Only the label goes in the Jenkinsfile.
 - **Masking is a safety net, not a guarantee.** It only matches the exact secret text. Anyone who can edit the Jenkinsfile can still leak a secret.
 - **Polling batches commits.** Three commits between polls give one build of the latest commit, and the failing commit can hide inside the batch. Polling works from `localhost` because Jenkins connects outward. A webhook needs Jenkins reachable from the internet.
@@ -421,30 +441,22 @@ Only arguments that start with `/` and refer to something inside a container are
 
 ---
 
-## 11. Security notes (fine for practice, not for production)
+## 8. Security notes (fine for practice, not for production)
 
 - Mounting `/var/run/docker.sock` and running as root lets Jenkins control Docker on the whole machine.
-- `-e ADMIN_PASSWORD=...` on the command line is visible in shell history. Use a secrets store for real setups.
-- The `render-deploy-hook` credential was added by clicking, so it lives in the volume. To make it survive a rebuild, define it in `jenkins.yaml` the same way as `demo-api-key` and pass the value with `-e`:
-
-```yaml
-          - string:
-              scope: GLOBAL
-              id: "render-deploy-hook"
-              secret: "${RENDER_DEPLOY_HOOK}"
-```
-
-- Never paste the deploy hook URL into chat, files, or the repo. Render can replace it if it leaks.
+- `.env` is a plain text file. Anyone with access to your machine's Docker can also read a container's environment with `docker inspect`. Real setups use a secrets manager.
+- `.env` exists only on your laptop. Back it up somewhere safe, or you will have to recreate it (including fetching a new hook URL from Render).
+- Never paste the deploy hook URL into chat, files tracked by git, or the repo. Render can replace it if it leaks.
+- Committing `.env` by mistake puts its contents in git history permanently. Check `git status` before every commit that follows a change to `.gitignore`.
 
 ---
 
-## 12. Possible next steps
+## 9. Possible next steps
 
-- Move `render-deploy-hook` into `jenkins.yaml` (section 11).
 - Pin the deploy to the exact commit Jenkins tested using the hook's `ref` parameter.
 - Replace polling with a webhook (needs a public address for Jenkins).
 - Pin plugin versions in `plugins.txt`.
 - Use separate build agents instead of mounting the Docker socket.
+- Replace the `.env` file with a real secrets manager.
 - Add real tests for the React app so the Test stage covers the page itself.
 - Back up the volume if build history matters.
-
