@@ -131,7 +131,7 @@ A pattern without a slash matches `.env` in any folder. Commit this file **befor
 ```
 ADMIN_PASSWORD=choose-a-password
 DEMO_API_KEY=my-fake-api-key
-RENDER_DEPLOY_HOOK=paste-your-hook-url-here
+RENDER_DEPLOY_HOOK=render-hook
 ```
 
 - One variable per line, no spaces around `=`, no quotes (Docker treats quotes as part of the value).
