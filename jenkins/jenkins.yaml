@@ -22,6 +22,10 @@ credentials:
               scope: GLOBAL
               id: "demo-api-key"
               secret: "${DEMO_API_KEY}"
+          - string:
+              scope: GLOBAL
+              id: "render-deploy-hook"
+              secret: "${RENDER_DEPLOY_HOOK}"
 jobs:
   - script: |
       pipelineJob('hello-pipeline') {
